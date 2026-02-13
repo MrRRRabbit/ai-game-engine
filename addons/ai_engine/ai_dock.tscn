@@ -15,6 +15,15 @@ bbcode_enabled = true
 scroll_following = true
 selection_enabled = true
 
+[node name="GameTypeRow" type="HBoxContainer" parent="."]
+size_flags_vertical = 0
+
+[node name="GameTypeLabel" type="Label" parent="GameTypeRow"]
+text = "🎮 Type:"
+
+[node name="GameTypeSelector" type="OptionButton" parent="GameTypeRow"]
+size_flags_horizontal = 3
+
 [node name="InputRow" type="HBoxContainer" parent="."]
 size_flags_vertical = 0
 

@@ -7,6 +7,7 @@ var editor_plugin: EditorPlugin
 @onready var input_field: LineEdit = $InputRow/InputField
 @onready var send_btn: Button = $InputRow/SendBtn
 @onready var status_label: Label = $StatusBar/StatusLabel
+@onready var game_type_selector: OptionButton = $GameTypeRow/GameTypeSelector
 
 var conversation: Array[Dictionary] = []
 var is_generating: bool = false
@@ -22,10 +23,29 @@ var json_retry_attempt: int = 0
 const MAX_JSON_RETRIES := 2
 var last_user_prompt: String = ""
 
+# Game type detection
+enum GameType { UNIVERSAL, PLATFORMER, SNAKE, BREAKOUT, SHOOTER }
+var current_game_type: int = GameType.UNIVERSAL
+
+const GAME_TYPE_KEYWORDS := {
+	GameType.PLATFORMER: ["platformer", "platform", "平台跳跃", "平台", "跳跃游戏", "mario", "jump", "横版"],
+	GameType.SNAKE: ["snake", "贪吃蛇", "蛇", "贪食蛇"],
+	GameType.BREAKOUT: ["breakout", "打砖块", "砖块", "brick", "arkanoid", "弹球", "paddle"],
+	GameType.SHOOTER: ["shooter", "射击", "shooting", "弹幕", "shmup", "太空", "飞机大战", "bullet"],
+}
+
+const GAME_TYPE_NAMES := {
+	GameType.UNIVERSAL: "Auto-detect",
+	GameType.PLATFORMER: "Platformer",
+	GameType.SNAKE: "Snake",
+	GameType.BREAKOUT: "Breakout",
+	GameType.SHOOTER: "Shooter",
+}
+
 # ---------------------------------------------------------------------------
-# System prompt
+# System prompt (base + game-specific rules)
 # ---------------------------------------------------------------------------
-const SYSTEM_PROMPT := """You are an expert Godot 4 game developer integrated into the Godot editor.
+const BASE_PROMPT := """You are an expert Godot 4 game developer integrated into the Godot editor.
 You help users create and modify games through natural language.
 
 You must output a valid JSON object with this exact structure:
@@ -48,11 +68,7 @@ RULES:
 - Use Godot 4.x syntax (CharacterBody2D, @onready, etc.)
 - Include proper collision shapes for all physics bodies.
 - Use call_group() for cross-node communication.
-- Gravity ~980.0, jump velocity ~-650.0
-- Make jump height sufficient to reach platforms.
-- Player should reset if falling off screen.
 - Include UI layer with score/status when relevant.
-- project.godot must have input mappings (physical_keycode: A=65, D=68, Space=32, Left=4194319, Right=4194321, Up=4194320).
 - All ext_resource id values in .tscn files must match correctly.
 - load_steps count must match the actual number of ext_resource + sub_resource entries.
 - All node parent paths must be valid and refer to existing ancestor nodes.
@@ -63,6 +79,59 @@ RULES:
 
 When modifying, look at the CURRENT PROJECT FILES provided and make targeted changes.
 Output ONLY the JSON object."""
+
+const GAME_RULES_PLATFORMER := """
+GAME-SPECIFIC RULES (Platformer):
+- Use CharacterBody2D for the player with gravity ~980.0 and jump velocity ~-650.0.
+- Make jump height sufficient to reach platforms.
+- Player should reset if falling off screen.
+- project.godot must have input mappings (physical_keycode: A=65, D=68, Space=32, Left=4194319, Right=4194321, Up=4194320).
+- Use move_and_slide() for character movement.
+- Include solid ground/platforms with StaticBody2D + CollisionShape2D.
+- Camera follows player if level is larger than viewport."""
+
+const GAME_RULES_SNAKE := """
+GAME-SPECIFIC RULES (Snake / 贪吃蛇):
+- Use a Timer node for movement ticks (interval ~0.15s for moderate speed).
+- Grid-based movement: define a CELL_SIZE (e.g., 20-30 pixels), snap all positions to grid.
+- Snake body is an Array of Vector2i grid positions. Head is body[0].
+- Each tick: insert new head position at front, remove tail (unless just ate food).
+- Food spawns at random empty grid cell using ColorRect or Polygon2D.
+- Self-collision: check if new head position exists in body array.
+- Wall collision: check grid boundaries.
+- Growing: when head reaches food position, do NOT remove tail that tick, increment score.
+- Input: 4-direction (Up/Down/Left/Right or W/A/S/D). Prevent 180-degree reversal.
+- project.godot input mappings: W=87/Up=4194320, S=83/Down=4194322, A=65/Left=4194319, D=68/Right=4194321.
+- Use Node2D as root. Draw snake segments and food using _draw() or individual ColorRect children.
+- Do NOT use CharacterBody2D or physics — this is purely grid logic with Timer-driven updates."""
+
+const GAME_RULES_BREAKOUT := """
+GAME-SPECIFIC RULES (Breakout / 打砖块):
+- Paddle: use CharacterBody2D or AnimatableBody2D at screen bottom, horizontal movement only.
+- Ball: use CharacterBody2D with move_and_collide(). Reflect velocity on collision normal.
+- Ball speed should be constant magnitude, only direction changes on bounce.
+- Bricks: grid of StaticBody2D nodes. Use queue_free() on hit. Track remaining count.
+- Brick grid: at least 4 rows x 8 columns. Use nested loops to generate positions.
+- Lives system: 3 lives. Ball falls off bottom = lose a life, reset ball to paddle.
+- Win condition: all bricks destroyed. Lose condition: 0 lives.
+- project.godot input mappings: A=65/Left=4194319, D=68/Right=4194321 for paddle.
+- Ball initial launch: slight random angle upward from paddle center.
+- Walls: StaticBody2D on left, right, and top edges. No wall on bottom (ball falls out).
+- Use collision layers to separate ball-brick, ball-paddle, and ball-wall interactions."""
+
+const GAME_RULES_SHOOTER := """
+GAME-SPECIFIC RULES (Shooter / 射击):
+- Player ship: CharacterBody2D, moves in 2D (left/right, optionally up/down).
+- Bullet spawning: instantiate bullet scene at player position on shoot input.
+- Bullets: Area2D with CollisionShape2D, move upward at constant speed, queue_free() when off-screen.
+- Enemy waves: use Timer to spawn enemies at top of screen. Enemies move downward.
+- Enemy types: at minimum one basic enemy that moves down in straight line or slight zigzag.
+- Damage system: enemies destroyed on bullet hit (body_entered signal). Player hit = lose life.
+- Score: increment on enemy kill. Display in UI Label.
+- project.godot input mappings: A=65/Left=4194319, D=68/Right=4194321 for movement, Space=32 for shoot.
+- Use preload() for bullet and enemy scenes. Spawn via instantiate() + add_child().
+- Screen bounds: prevent player from leaving viewport. Despawn enemies/bullets that exit screen.
+- Collision layers: player on layer 1, enemies on layer 2, player bullets on layer 3."""
 
 const REPAIR_PROMPT := """The code you generated has errors. Fix ALL of the following errors.
 
@@ -90,8 +159,18 @@ Respond with ONLY the JSON object. Nothing else."""
 func _ready() -> void:
 	send_btn.pressed.connect(_on_send)
 	input_field.text_submitted.connect(_on_text_submitted)
-	_append_system("🎮 AI Game Engine v0.3")
-	_append_system("Now with auto-repair: errors are detected and fixed automatically.")
+
+	# Populate game type dropdown
+	game_type_selector.add_item("Auto-detect", GameType.UNIVERSAL)
+	game_type_selector.add_item("Platformer / 平台跳跃", GameType.PLATFORMER)
+	game_type_selector.add_item("Snake / 贪吃蛇", GameType.SNAKE)
+	game_type_selector.add_item("Breakout / 打砖块", GameType.BREAKOUT)
+	game_type_selector.add_item("Shooter / 射击", GameType.SHOOTER)
+	game_type_selector.selected = 0
+	game_type_selector.item_selected.connect(_on_game_type_selected)
+
+	_append_system("🎮 AI Game Engine v0.4")
+	_append_system("Game type templates: Platformer, Snake, Breakout, Shooter (auto-detected or select above).")
 	_append_system("Type a game description to create, or describe changes to modify.")
 
 
@@ -108,7 +187,64 @@ func _on_send() -> void:
 	_append_user(text)
 	repair_attempt = 0
 	json_retry_attempt = 0
+
+	# Game type detection / selection
+	var dropdown_type: int = game_type_selector.get_item_id(game_type_selector.selected)
+	if dropdown_type != GameType.UNIVERSAL:
+		# User explicitly selected a type — use it
+		current_game_type = dropdown_type
+	else:
+		# Auto-detect from text
+		var detected := _detect_game_type(text)
+		if detected != GameType.UNIVERSAL:
+			current_game_type = detected
+			# Update dropdown to show detected type (visual feedback)
+			for i in range(game_type_selector.item_count):
+				if game_type_selector.get_item_id(i) == detected:
+					game_type_selector.selected = i
+					break
+			_append_system("🎯 Detected game type: %s" % GAME_TYPE_NAMES.get(detected, "Unknown"))
+		# else: keep current_game_type from previous message (sticky)
+
 	_start_generation(text)
+
+
+func _on_game_type_selected(index: int) -> void:
+	var selected_id: int = game_type_selector.get_item_id(index)
+	current_game_type = selected_id
+	if current_game_type != GameType.UNIVERSAL:
+		_append_system("Game type set to: %s" % game_type_selector.get_item_text(index))
+	else:
+		_append_system("Game type set to auto-detect.")
+
+
+# ---------------------------------------------------------------------------
+# Prompt composition & game type detection
+# ---------------------------------------------------------------------------
+func _build_system_prompt(game_type: int) -> String:
+	var rules := ""
+	match game_type:
+		GameType.PLATFORMER:
+			rules = GAME_RULES_PLATFORMER
+		GameType.SNAKE:
+			rules = GAME_RULES_SNAKE
+		GameType.BREAKOUT:
+			rules = GAME_RULES_BREAKOUT
+		GameType.SHOOTER:
+			rules = GAME_RULES_SHOOTER
+		_:
+			# Universal fallback: use platformer rules (matches v0.3 behavior)
+			rules = GAME_RULES_PLATFORMER
+	return BASE_PROMPT + "\n" + rules
+
+
+func _detect_game_type(user_text: String) -> int:
+	var lower := user_text.to_lower()
+	for game_type in GAME_TYPE_KEYWORDS:
+		for keyword in GAME_TYPE_KEYWORDS[game_type]:
+			if lower.find(keyword) >= 0:
+				return game_type
+	return GameType.UNIVERSAL
 
 
 # ---------------------------------------------------------------------------
@@ -558,10 +694,11 @@ func _start_generation(user_text: String, is_repair: bool = false) -> void:
 	else:
 		status_label.text = "⏳ Generating..."
 
+	var system_prompt := _build_system_prompt(current_game_type)
 	var full_prompt: String
 
 	if is_repair:
-		full_prompt = SYSTEM_PROMPT + "\n\n" + user_text + "\n\nIMPORTANT: Your response must be ONLY a valid JSON object starting with { — no other text."
+		full_prompt = system_prompt + "\n\n" + user_text + "\n\nIMPORTANT: Your response must be ONLY a valid JSON object starting with { — no other text."
 	else:
 		last_user_prompt = user_text
 		conversation.append({"role": "user", "content": user_text})
@@ -573,7 +710,7 @@ func _start_generation(user_text: String, is_repair: bool = false) -> void:
 			history_text += "%s: %s\n" % [prefix, msg.content]
 
 		full_prompt = "%s\n\n%s\nCONVERSATION:\n%s\n\nIMPORTANT: Your response must be ONLY a valid JSON object starting with { — no other text." % [
-			SYSTEM_PROMPT, project_context, history_text
+			system_prompt, project_context, history_text
 		]
 
 	worker_thread = Thread.new()

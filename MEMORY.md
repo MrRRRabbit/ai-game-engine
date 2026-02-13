@@ -88,6 +88,20 @@
 - **JSON 重试机制**: Claude 返回非 JSON 响应时自动重试最多 2 次，使用 `JSON_RETRY_PROMPT` 强化 JSON 指令
 - **状态**: ✅ Steve 验证通过，功能落地和错误自修复体验符合预期
 
+### 🚧 Phase 3: 游戏类型 Prompt 模板系统 (v0.4) — 开发中
+- **开始日期**: 2025-02-13
+- **核心架构决策: Prompt 模块化拆分**:
+  - **BASE_PROMPT**: 通用规则（JSON 格式、Godot 4 语法、场景结构、call_group 等）
+  - **GAME_RULES_PLATFORMER**: 重力 980、跳跃 -650、CharacterBody2D、WASD/箭头输入
+  - **GAME_RULES_SNAKE**: 网格移动、Timer 驱动、Array 身体、不用物理引擎、4 方向输入
+  - **GAME_RULES_BREAKOUT**: 挡板 + 球 + 砖块网格、move_and_collide 反射、3 条命
+  - **GAME_RULES_SHOOTER**: 子弹生成、敌人波次、碰撞分层、preload/instantiate
+- **组合方式**: `_build_system_prompt(game_type)` → `BASE_PROMPT + GAME_RULES_*`
+- **游戏类型检测**: `_detect_game_type()` 从用户输入关键词自动匹配（中英文），Sticky 持久化
+- **UI**: OptionButton 下拉框，支持手动选择或 Auto-detect
+- **回退策略**: 未匹配时回退到 PLATFORMER 规则（兼容 v0.3 行为）
+- **状态**: 代码已生成，待 Steve 验证
+
 ### 📋 第三步: GDExtension 运行时模块 — 未开始
 
 ---
@@ -111,6 +125,8 @@
 4. 必须要求包含 project.godot、input mapping、collision shapes
 5. 物理参数需要给出参考范围（gravity ~980, jump ~-650）
 6. 明确禁止使用外部资产，只用 ColorRect/Polygon2D
+7. **v0.4**: Prompt 拆分为 BASE_PROMPT（通用）+ GAME_RULES_*（按类型），避免规则冲突
+8. **v0.4**: 每种游戏类型需要专用的输入映射、节点类型、架构模式
 
 ### 常见生成问题及修复
 | 问题 | 原因 | 修复 |
@@ -136,12 +152,12 @@
 
 ## 下一步计划
 
-> Phase 1 ✅ → Phase 2 ✅ → v0.3 ✅ → **Phase 3 剩余工作 ←（当前）**
+> Phase 1 ✅ → Phase 2 ✅ → v0.3 ✅ → v0.4 Prompt 模板 🚧 → **Phase 3 剩余 ←**
 
-1. 支持更多游戏类型：贪吃蛇、打砖块、弹幕射击、RPG 等，验证泛化能力
-2. Prompt 分类优化：按游戏类型使用专门的 prompt 模板，提升一次成功率
-3. 自动运行测试：headless 模式运行生成的游戏，截图对比验证
-4. 支持中英文混合输入优化
+1. 验证 v0.4 游戏类型模板：测试 4 种游戏生成质量（平台跳跃/贪吃蛇/打砖块/射击）
+2. 自动运行测试：headless 模式运行生成的游戏，截图对比验证
+3. 支持中英文混合输入优化
+4. 扩展更多游戏类型（RPG、解谜等）
 
 ---
 
