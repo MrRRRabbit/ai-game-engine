@@ -12,6 +12,11 @@ var conversation: Array[Dictionary] = []
 var is_generating: bool = false
 var worker_thread: Thread
 
+# Auto-repair state
+var repair_attempt: int = 0
+const MAX_REPAIR_ATTEMPTS := 3
+var last_generated_files: Array = []
+
 # ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
@@ -43,17 +48,35 @@ RULES:
 - Player should reset if falling off screen.
 - Include UI layer with score/status when relevant.
 - project.godot must have input mappings (physical_keycode: A=65, D=68, Space=32, Left=4194319, Right=4194321, Up=4194320).
+- All ext_resource id values in .tscn files must match correctly.
+- load_steps count must match the actual number of ext_resource + sub_resource entries.
+- All node parent paths must be valid and refer to existing ancestor nodes.
+- All script references in scenes must point to existing .gd files with correct paths.
+- Groups used in call_group() must have corresponding add_to_group() calls.
+- Signal connections must reference methods that actually exist on the target script.
+- Avoid duplicate node names under the same parent.
 
 When modifying, look at the CURRENT PROJECT FILES provided and make targeted changes.
 Output ONLY the JSON object."""
+
+const REPAIR_PROMPT := """The code you generated has errors. Fix ALL of the following errors.
+
+ERRORS DETECTED:
+%s
+
+CURRENT FILES THAT NEED FIXING:
+%s
+
+Output a JSON object with the fixed files. Include ALL files that need changes, with their COMPLETE content (not partial).
+Fix every error listed above. Output ONLY the JSON object."""
 
 
 func _ready() -> void:
 	send_btn.pressed.connect(_on_send)
 	input_field.text_submitted.connect(_on_text_submitted)
-	_append_system("🎮 AI Game Engine v0.2")
+	_append_system("🎮 AI Game Engine v0.3")
+	_append_system("Now with auto-repair: errors are detected and fixed automatically.")
 	_append_system("Type a game description to create, or describe changes to modify.")
-	_append_system("Example: \"做一个2D平台跳跃游戏\" or \"加一个会巡逻的敌人\"")
 
 
 func _on_text_submitted(_text: String) -> void:
@@ -67,6 +90,7 @@ func _on_send() -> void:
 
 	input_field.text = ""
 	_append_user(text)
+	repair_attempt = 0
 	_start_generation(text)
 
 
@@ -85,6 +109,9 @@ func _append_system(text: String) -> void:
 func _append_error(text: String) -> void:
 	chat_history.append_text("[color=red]❌ " + text + "[/color]\n")
 
+func _append_repair(text: String) -> void:
+	chat_history.append_text("[color=yellow]🔧 " + text + "[/color]\n")
+
 
 # ---------------------------------------------------------------------------
 # Project context gathering
@@ -100,7 +127,6 @@ func _get_project_context() -> String:
 		var file := FileAccess.open(path, FileAccess.READ)
 		if file:
 			var content := file.get_as_text()
-			# Limit per-file size to avoid overwhelming the context
 			if content.length() > 3000:
 				content = content.substr(0, 3000) + "\n... (truncated)"
 			context += "\n--- %s ---\n%s\n" % [path, content]
@@ -120,11 +146,9 @@ func _scan_project_files(dir_path: String, result: Array) -> Array:
 		var full_path := dir_path.path_join(file_name)
 
 		if dir.current_is_dir():
-			# Skip addons and .godot directories
 			if file_name != "addons" and file_name != ".godot" and not file_name.begins_with("."):
 				_scan_project_files(full_path, result)
 		else:
-			# Include game-relevant files
 			if file_name.ends_with(".gd") or file_name.ends_with(".tscn") or file_name.ends_with(".tres") or file_name == "project.godot":
 				result.append(full_path)
 
@@ -134,47 +158,229 @@ func _scan_project_files(dir_path: String, result: Array) -> Array:
 
 
 # ---------------------------------------------------------------------------
+# Error detection & validation
+# ---------------------------------------------------------------------------
+func _validate_generated_files() -> Array[String]:
+	var errors: Array[String] = []
+
+	for file_info in last_generated_files:
+		var path: String = file_info.get("path", "")
+		var content: String = file_info.get("content", "")
+
+		if path.is_empty():
+			continue
+
+		if path.ends_with(".gd"):
+			errors.append_array(_validate_gdscript(path, content))
+		elif path.ends_with(".tscn"):
+			errors.append_array(_validate_scene(path, content))
+
+	return errors
+
+
+func _validate_gdscript(path: String, content: String) -> Array[String]:
+	var errors: Array[String] = []
+	var lines := content.split("\n")
+
+	# Check: Must have extends
+	var has_extends := false
+	for line in lines:
+		if line.strip_edges().begins_with("extends "):
+			has_extends = true
+			break
+	if not has_extends and not content.strip_edges().is_empty():
+		errors.append("[%s] Missing 'extends' declaration" % path)
+
+	for i in range(lines.size()):
+		var line := lines[i].strip_edges()
+		if line.begins_with("#"):
+			continue
+
+		# Godot 3 syntax checks
+		if "onready var" in line and "@onready" not in line:
+			errors.append("[%s:%d] Use '@onready var' instead of 'onready var' (Godot 4)" % [path, i + 1])
+
+		if "export var" in line and "@export" not in line:
+			errors.append("[%s:%d] Use '@export var' instead of 'export var' (Godot 4)" % [path, i + 1])
+
+		if "KinematicBody2D" in line:
+			errors.append("[%s:%d] Use 'CharacterBody2D' instead of 'KinematicBody2D' (Godot 4)" % [path, i + 1])
+
+		if "move_and_slide(velocity" in line:
+			errors.append("[%s:%d] In Godot 4, move_and_slide() takes no args. Set velocity property first." % [path, i + 1])
+
+		if line.begins_with("yield") or " yield(" in line:
+			errors.append("[%s:%d] Use 'await' instead of 'yield' (Godot 4)" % [path, i + 1])
+
+		if ".connect(\"" in line:
+			errors.append("[%s:%d] Use new signal syntax: signal.connect(callable) not connect(\"string\")" % [path, i + 1])
+
+	return errors
+
+
+func _validate_scene(path: String, content: String) -> Array[String]:
+	var errors: Array[String] = []
+	var lines := content.split("\n")
+
+	var declared_load_steps := 0
+	var actual_resources := 0
+	var node_names := {}
+	var script_paths := []
+
+	for line in lines:
+		var stripped := line.strip_edges()
+
+		# Parse load_steps
+		if stripped.begins_with("[gd_scene"):
+			var ls_pos := stripped.find("load_steps=")
+			if ls_pos >= 0:
+				var num_start := ls_pos + 11
+				var num_end := num_start
+				while num_end < stripped.length() and stripped[num_end].is_valid_int():
+					num_end += 1
+				if num_end > num_start:
+					declared_load_steps = stripped.substr(num_start, num_end - num_start).to_int()
+
+		# Count resources
+		if stripped.begins_with("[ext_resource"):
+			actual_resources += 1
+			if "type=\"Script\"" in stripped or "type=\"GDScript\"" in stripped:
+				var p_pos := stripped.find("path=\"")
+				if p_pos >= 0:
+					var p_start := p_pos + 6
+					var p_end := stripped.find("\"", p_start)
+					if p_end > p_start:
+						script_paths.append(stripped.substr(p_start, p_end - p_start))
+
+		if stripped.begins_with("[sub_resource"):
+			actual_resources += 1
+
+		# Check duplicate node names
+		if stripped.begins_with("[node name=\""):
+			var name_start := 12
+			var name_end := stripped.find("\"", name_start)
+			if name_end > name_start:
+				var node_name := stripped.substr(name_start, name_end - name_start)
+				var parent := "."
+				var par_pos := stripped.find("parent=\"")
+				if par_pos >= 0:
+					var par_start := par_pos + 8
+					var par_end := stripped.find("\"", par_start)
+					if par_end > par_start:
+						parent = stripped.substr(par_start, par_end - par_start)
+
+				if parent not in node_names:
+					node_names[parent] = []
+				if node_name in node_names[parent]:
+					errors.append("[%s] Duplicate node name '%s' under parent '%s'" % [path, node_name, parent])
+				else:
+					node_names[parent].append(node_name)
+
+	# Validate load_steps
+	if declared_load_steps > 0 and actual_resources > 0:
+		if declared_load_steps != actual_resources + 1:
+			errors.append("[%s] load_steps=%d but found %d resources. Should be load_steps=%d" % [
+				path, declared_load_steps, actual_resources, actual_resources + 1
+			])
+
+	# Check script files exist
+	for script_path in script_paths:
+		if not FileAccess.file_exists(script_path):
+			var found := false
+			for file_info in last_generated_files:
+				if file_info.get("path", "") == script_path:
+					found = true
+					break
+			if not found:
+				errors.append("[%s] References missing script '%s'" % [path, script_path])
+
+	return errors
+
+
+func _capture_godot_errors() -> Array[String]:
+	var errors: Array[String] = []
+
+	var log_path := OS.get_user_data_dir().path_join("logs")
+	var dir := DirAccess.open(log_path)
+	if not dir:
+		return errors
+
+	var latest_log := ""
+	var latest_time := 0
+	dir.list_dir_begin()
+	var fname := dir.get_next()
+	while fname != "":
+		if fname.ends_with(".log"):
+			var full := log_path.path_join(fname)
+			var mod_time := FileAccess.get_modified_time(full)
+			if mod_time > latest_time:
+				latest_time = mod_time
+				latest_log = full
+		fname = dir.get_next()
+
+	if latest_log.is_empty():
+		return errors
+
+	var file := FileAccess.open(latest_log, FileAccess.READ)
+	if not file:
+		return errors
+
+	var content := file.get_as_text()
+	var lines := content.split("\n")
+
+	var start_idx := max(0, lines.size() - 50)
+	for i in range(start_idx, lines.size()):
+		var line := lines[i]
+		if "ERROR" in line and "res://" in line:
+			# Filter out addon/editor noise
+			if "addons/ai_engine" not in line:
+				errors.append(line.strip_edges())
+
+	return errors
+
+
+# ---------------------------------------------------------------------------
 # Generation (threaded)
 # ---------------------------------------------------------------------------
-func _start_generation(user_text: String) -> void:
+func _start_generation(user_text: String, is_repair: bool = false) -> void:
 	is_generating = true
 	send_btn.disabled = true
-	status_label.text = "⏳ Generating..."
 
-	# Build conversation context
-	conversation.append({"role": "user", "content": user_text})
+	if is_repair:
+		status_label.text = "🔧 Auto-repairing (%d/%d)..." % [repair_attempt, MAX_REPAIR_ATTEMPTS]
+	else:
+		status_label.text = "⏳ Generating..."
 
-	# Build full prompt with project context
-	var project_context := _get_project_context()
+	var full_prompt: String
 
-	var history_text := ""
-	for msg in conversation:
-		var prefix = "User" if msg.role == "user" else "Assistant"
-		history_text += "%s: %s\n" % [prefix, msg.content]
+	if is_repair:
+		full_prompt = SYSTEM_PROMPT + "\n\n" + user_text + "\nRespond with JSON only."
+	else:
+		conversation.append({"role": "user", "content": user_text})
 
-	var full_prompt := "%s\n\n%s\nCONVERSATION:\n%s\nRespond with JSON only." % [
-		SYSTEM_PROMPT, project_context, history_text
-	]
+		var project_context := _get_project_context()
+		var history_text := ""
+		for msg in conversation:
+			var prefix = "User" if msg.role == "user" else "Assistant"
+			history_text += "%s: %s\n" % [prefix, msg.content]
 
-	# Run in thread to avoid freezing editor
+		full_prompt = "%s\n\n%s\nCONVERSATION:\n%s\nRespond with JSON only." % [
+			SYSTEM_PROMPT, project_context, history_text
+		]
+
 	worker_thread = Thread.new()
 	worker_thread.start(_call_claude_cli.bind(full_prompt))
 
 
 func _call_claude_cli(prompt: String) -> Dictionary:
 	var output := []
-	var exit_code := OS.execute("claude", ["--print", "--output-format", "text"], output, true, false)
 
-	# OS.execute doesn't support stdin easily, so we write prompt to temp file
 	var temp_path := OS.get_temp_dir().path_join("ai_engine_prompt.txt")
 	var temp_file := FileAccess.open(temp_path, FileAccess.WRITE)
 	if temp_file:
 		temp_file.store_string(prompt)
 		temp_file.close()
 
-	output.clear()
-
-	# Use shell to pipe the temp file into claude CLI
 	var shell_cmd: String
 	var shell_args: PackedStringArray
 
@@ -185,16 +391,14 @@ func _call_claude_cli(prompt: String) -> Dictionary:
 		shell_cmd = "cmd"
 		shell_args = PackedStringArray(["/c", "type \"%s\" | claude --print --output-format text" % temp_path])
 
-	exit_code = OS.execute(shell_cmd, shell_args, output, true, false)
+	var exit_code := OS.execute(shell_cmd, shell_args, output, true, false)
 
-	# Clean up temp file
 	DirAccess.remove_absolute(temp_path)
 
 	var result := {"exit_code": exit_code, "output": ""}
 	if output.size() > 0:
 		result.output = output[0]
 
-	# Call deferred to process result on main thread
 	call_deferred("_on_generation_complete", result)
 	return result
 
@@ -204,29 +408,31 @@ func _on_generation_complete(result: Dictionary) -> void:
 		worker_thread.wait_to_finish()
 		worker_thread = null
 
-	is_generating = false
-	send_btn.disabled = false
-
 	if result.exit_code != 0:
+		is_generating = false
+		send_btn.disabled = false
 		_append_error("Claude CLI failed (exit code %d)" % result.exit_code)
 		status_label.text = "Error"
 		return
 
 	var response_text: String = result.output.strip_edges()
 	if response_text.is_empty():
+		is_generating = false
+		send_btn.disabled = false
 		_append_error("Empty response from Claude CLI")
 		status_label.text = "Error"
 		return
 
-	# Parse JSON from response
+	# Parse JSON
 	var json_text := _extract_json(response_text)
 	var json := JSON.new()
 	var parse_result := json.parse(json_text)
 
 	if parse_result != OK:
+		is_generating = false
+		send_btn.disabled = false
 		_append_error("Failed to parse AI response as JSON")
-		_append_system("Raw response (first 300 chars): " + response_text.substr(0, 300))
-		# Save debug output
+		_append_system("Raw (first 300 chars): " + response_text.substr(0, 300))
 		var debug_file := FileAccess.open("res://ai_debug_response.txt", FileAccess.WRITE)
 		if debug_file:
 			debug_file.store_string(response_text)
@@ -239,8 +445,7 @@ func _on_generation_complete(result: Dictionary) -> void:
 	var message: String = data.get("message", "Done")
 	var files: Array = data.get("files", [])
 
-	# Store assistant response in conversation
-	conversation.append({"role": "assistant", "content": message})
+	last_generated_files = files
 
 	# Write files
 	var file_count := 0
@@ -251,7 +456,6 @@ func _on_generation_complete(result: Dictionary) -> void:
 		if path.is_empty():
 			continue
 
-		# Ensure directory exists
 		var dir_path := path.get_base_dir()
 		if not DirAccess.dir_exists_absolute(dir_path):
 			DirAccess.make_dir_recursive_absolute(dir_path)
@@ -262,30 +466,69 @@ func _on_generation_complete(result: Dictionary) -> void:
 			file.close()
 			file_count += 1
 
-	# Refresh the editor filesystem so new files appear
+	# Refresh editor filesystem
 	if editor_plugin:
 		editor_plugin.get_editor_interface().get_resource_filesystem().scan()
 
-	_append_ai("%s (%d files %s)" % [message, file_count, "created" if action == "create" else "modified"])
-	status_label.text = "Ready — %d files written" % file_count
+	# --- Validation & Auto-Repair ---
+	var validation_errors := _validate_generated_files()
+	var godot_errors := _capture_godot_errors()
+	var all_errors: Array[String] = []
+	all_errors.append_array(validation_errors)
+	all_errors.append_array(godot_errors)
+
+	if all_errors.size() > 0 and repair_attempt < MAX_REPAIR_ATTEMPTS:
+		repair_attempt += 1
+		_append_ai("%s (%d files written)" % [message, file_count])
+		_append_repair("Detected %d error(s), auto-repairing (%d/%d)..." % [
+			all_errors.size(), repair_attempt, MAX_REPAIR_ATTEMPTS
+		])
+		for err in all_errors:
+			_append_system("  • " + err)
+
+		# Build repair context
+		var files_context := ""
+		for file_info in last_generated_files:
+			files_context += "\n--- %s ---\n%s\n" % [file_info.get("path", ""), file_info.get("content", "")]
+
+		var error_text := "\n".join(all_errors)
+		var repair_prompt := REPAIR_PROMPT % [error_text, files_context]
+
+		_start_generation(repair_prompt, true)
+		return
+
+	# --- Done ---
+	is_generating = false
+	send_btn.disabled = false
+
+	conversation.append({"role": "assistant", "content": message})
+
+	if all_errors.size() > 0:
+		_append_ai("%s (%d files written)" % [message, file_count])
+		_append_repair("Some errors remain after %d attempts:" % MAX_REPAIR_ATTEMPTS)
+		for err in all_errors:
+			_append_system("  • " + err)
+		status_label.text = "Done with warnings — %d files" % file_count
+	else:
+		_append_ai("%s (%d files %s) ✅" % [message, file_count, "created" if action == "create" else "modified"])
+		if repair_attempt > 0:
+			_append_repair("All errors fixed after %d attempt(s)!" % repair_attempt)
+		status_label.text = "Ready ✅ — %d files" % file_count
 
 
 # ---------------------------------------------------------------------------
 # JSON extraction helper
 # ---------------------------------------------------------------------------
 func _extract_json(text: String) -> String:
-	# Remove markdown code fences if present
 	var cleaned := text
 	if cleaned.begins_with("```"):
 		var lines := cleaned.split("\n")
-		# Remove first line (```json) and last line (```)
 		if lines.size() > 2:
 			lines.remove_at(0)
 			if lines[lines.size() - 1].strip_edges() == "```":
 				lines.remove_at(lines.size() - 1)
 			cleaned = "\n".join(lines)
 
-	# Try to find JSON object boundaries
 	var start := cleaned.find("{")
 	var end := cleaned.rfind("}")
 
