@@ -215,7 +215,169 @@ func _validate_gdscript(path: String, content: String) -> Array[String]:
 		if ".connect(\"" in line:
 			errors.append("[%s:%d] Use new signal syntax: signal.connect(callable) not connect(\"string\")" % [path, i + 1])
 
+	# --- Unused variable detection ---
+	errors.append_array(_check_unused_variables(path, lines))
+
+	# --- Unused function detection ---
+	errors.append_array(_check_unused_functions(path, lines))
+
 	return errors
+
+
+func _check_unused_variables(path: String, lines: PackedStringArray) -> Array[String]:
+	var warnings: Array[String] = []
+
+	# Collect declared variables: { name: line_number }
+	var declarations := {}
+	for i in range(lines.size()):
+		var line := lines[i].strip_edges()
+		if line.begins_with("#"):
+			continue
+
+		var var_name := _extract_var_name(line)
+		if not var_name.is_empty():
+			declarations[var_name] = i + 1
+
+	# Check each declared variable for usage elsewhere
+	for var_name in declarations:
+		var decl_line_idx: int = declarations[var_name] - 1
+		var is_used := false
+
+		for i in range(lines.size()):
+			if i == decl_line_idx:
+				continue
+			var line := lines[i]
+			# Skip comments
+			var stripped := line.strip_edges()
+			if stripped.begins_with("#"):
+				continue
+			# Check if the variable name appears as a whole word
+			if _contains_identifier(line, var_name):
+				is_used = true
+				break
+
+		if not is_used:
+			warnings.append("[%s:%d] Variable '%s' is declared but never used" % [
+				path, declarations[var_name], var_name
+			])
+
+	return warnings
+
+
+func _extract_var_name(line: String) -> String:
+	# Matches: var x, @onready var x, @export var x, static var x
+	# Skips: lines inside func bodies that are parameters, const, enum
+	var patterns := ["@onready var ", "@export var ", "static var ", "var "]
+	for pattern in patterns:
+		var pos := line.find(pattern)
+		if pos >= 0:
+			var after := line.substr(pos + pattern.length()).strip_edges()
+			# Extract identifier: stops at :, =, space, or end
+			var var_name := ""
+			for ch_idx in range(after.length()):
+				var ch := after[ch_idx]
+				if ch == ":" or ch == "=" or ch == " " or ch == "\t":
+					break
+				var_name += ch
+			if not var_name.is_empty():
+				return var_name
+	return ""
+
+
+func _contains_identifier(line: String, identifier: String) -> bool:
+	var search_start := 0
+	while true:
+		var pos := line.find(identifier, search_start)
+		if pos < 0:
+			return false
+
+		# Check left boundary: must be start of line or non-identifier char
+		var left_ok := (pos == 0) or not _is_identifier_char(line[pos - 1])
+		# Check right boundary
+		var end_pos := pos + identifier.length()
+		var right_ok := (end_pos >= line.length()) or not _is_identifier_char(line[end_pos])
+
+		if left_ok and right_ok:
+			return true
+
+		search_start = pos + 1
+	return false
+
+
+func _is_identifier_char(ch: String) -> bool:
+	return (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or \
+		(ch >= "0" and ch <= "9") or ch == "_"
+
+
+func _check_unused_functions(path: String, lines: PackedStringArray) -> Array[String]:
+	var warnings: Array[String] = []
+
+	# Built-in callbacks that Godot calls automatically — never flag these
+	var builtin_callbacks := [
+		"_ready", "_process", "_physics_process", "_input", "_unhandled_input",
+		"_unhandled_key_input", "_enter_tree", "_exit_tree", "_notification",
+		"_draw", "_gui_input", "_get_configuration_warnings",
+		"_get_minimum_size", "_make_custom_tooltip",
+		"_init", "_static_init", "_to_string",
+	]
+
+	# Collect declared functions: { name: line_number }
+	var declarations := {}
+	for i in range(lines.size()):
+		var line := lines[i].strip_edges()
+		if line.begins_with("#"):
+			continue
+		if line.begins_with("func ") or line.begins_with("static func "):
+			var func_name := _extract_func_name(line)
+			if func_name.is_empty():
+				continue
+			# Skip builtins and private signal handlers (common Godot pattern)
+			if func_name in builtin_callbacks:
+				continue
+			declarations[func_name] = i + 1
+
+	# Check each declared function for references elsewhere
+	for func_name in declarations:
+		var decl_line_idx: int = declarations[func_name] - 1
+		var is_used := false
+
+		for i in range(lines.size()):
+			if i == decl_line_idx:
+				continue
+			var line := lines[i]
+			var stripped := line.strip_edges()
+			if stripped.begins_with("#"):
+				continue
+			# Skip: the function's own body re-declaring itself is not a reference
+			if stripped.begins_with("func ") or stripped.begins_with("static func "):
+				continue
+			if _contains_identifier(line, func_name):
+				is_used = true
+				break
+
+		if not is_used:
+			warnings.append("[%s:%d] Function '%s' is declared but never referenced" % [
+				path, declarations[func_name], func_name
+			])
+
+	return warnings
+
+
+func _extract_func_name(line: String) -> String:
+	var prefix := "func "
+	if line.begins_with("static func "):
+		prefix = "static func "
+	var pos := line.find(prefix)
+	if pos < 0:
+		return ""
+	var after := line.substr(pos + prefix.length()).strip_edges()
+	var func_name := ""
+	for ch_idx in range(after.length()):
+		var ch := after[ch_idx]
+		if ch == "(" or ch == " " or ch == ":":
+			break
+		func_name += ch
+	return func_name
 
 
 func _validate_scene(path: String, content: String) -> Array[String]:
@@ -331,7 +493,10 @@ func _capture_godot_errors() -> Array[String]:
 	var start_idx := max(0, lines.size() - 50)
 	for i in range(start_idx, lines.size()):
 		var line := lines[i]
-		if "ERROR" in line and "res://" in line:
+		# Capture both ERROR and WARNING level entries referencing project files
+		var is_error := "ERROR" in line and "res://" in line
+		var is_warning := "WARNING" in line and "res://" in line
+		if (is_error or is_warning):
 			# Filter out addon/editor noise
 			if "addons/ai_engine" not in line:
 				errors.append(line.strip_edges())
