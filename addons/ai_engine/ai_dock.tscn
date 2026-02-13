@@ -1,0 +1,34 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://addons/ai_engine/ai_dock.gd" id="1"]
+
+[node name="AIDock" type="VBoxContainer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1")
+
+[node name="ChatHistory" type="RichTextLabel" parent="."]
+custom_minimum_size = Vector2(0, 200)
+size_flags_vertical = 3
+bbcode_enabled = true
+scroll_following = true
+selection_enabled = true
+
+[node name="InputRow" type="HBoxContainer" parent="."]
+size_flags_vertical = 0
+
+[node name="InputField" type="LineEdit" parent="InputRow"]
+size_flags_horizontal = 3
+placeholder_text = "描述你想要的游戏或修改... (Enter to send)"
+clear_button_enabled = true
+
+[node name="SendBtn" type="Button" parent="InputRow"]
+custom_minimum_size = Vector2(80, 0)
+text = "Send"
+
+[node name="StatusBar" type="HBoxContainer" parent="."]
+
+[node name="StatusLabel" type="Label" parent="StatusBar"]
+size_flags_horizontal = 3
+text = "Ready"

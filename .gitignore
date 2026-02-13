@@ -1,0 +1,24 @@
+# Godot
+.godot/
+*.import
+export_presets.cfg
+
+# Generated output
+tools/output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug
+ai_debug_response.txt
+_debug_response.txt
+
+# IDE
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
