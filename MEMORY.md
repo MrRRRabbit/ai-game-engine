@@ -73,8 +73,11 @@
 - **能力**: 生成后自动校验 → 捕获错误 → 喂回 AI 修复 → 最多重试 3 次
 - **校验项**:
   - GDScript: extends 声明、Godot 3/4 语法混用、信号连接语法
+  - GDScript: 未使用变量检测（var/@onready var/@export var，全词匹配）
+  - GDScript: 未使用函数检测（自动跳过 _ready 等 17 个 Godot 内置回调）
   - Scene: load_steps 计数、重复节点名、脚本引用缺失
-  - Godot 日志: 捕获最近 ERROR 级别输出
+  - Godot 日志: 捕获最近 ERROR + WARNING 级别输出
+- **辅助工具函数**: `_extract_var_name()`, `_extract_func_name()`, `_contains_identifier()`, `_is_identifier_char()`
 - **状态**: 代码已生成，待 Steve 验证
 
 ### 📋 第三步: GDExtension 运行时模块 — 未开始
@@ -123,11 +126,11 @@
 
 ## 下一步计划
 
-1. 验证编辑器插件（第二步）能否在 Godot 内正常工作
+1. 验证 v0.3 自动修复循环在 Godot 4.6 中正常工作（含未使用变量/函数检测）
 2. 测试对话式迭代：创建游戏 → 追加敌人 → 修改背景 → 调整参数
 3. 丰富支持的游戏类型：贪吃蛇、打砖块、弹幕射击等
 4. 优化 prompt，提升生成一次成功率
-5. 加入生成后自动校验（检查场景引用、脚本语法等）
+5. 考虑按游戏类型分类 prompt（平台跳跃 vs 射击 vs RPG）
 
 ---
 
@@ -142,4 +145,4 @@
 
 ---
 
-*最后更新: 2025-02-13*
+*最后更新: 2026-02-13*

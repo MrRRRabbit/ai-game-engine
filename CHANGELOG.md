@@ -8,6 +8,9 @@
 - Godot 日志错误捕获: 读取最近 ERROR 输出
 - 修复过程可视化: 聊天面板显示 🔧 修复状态和错误详情
 - System Prompt 增强: 新增场景文件格式约束规则
+- 未使用变量检测: 静态分析 var/@onready var/@export var 声明，全词匹配检查引用
+- 未使用函数检测: 静态分析 func/static func 声明，自动跳过 Godot 内置回调 (17 个)
+- Godot 日志 WARNING 捕获: 日志扫描范围从仅 ERROR 扩展至 ERROR + WARNING
 
 ## [0.2.0] - 2025-02-13 ✅
 ### Added
