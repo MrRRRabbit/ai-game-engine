@@ -44,7 +44,7 @@ ADDON_SOURCE="$ENGINE_ROOT/addons/ai_engine"
 # 参数解析
 # ---------------------------------------------------------------------------
 PROJECT_NAME="$1"
-TARGET_BASE="${2:-$HOME/GodotGames}"
+TARGET_BASE="${2:-$HOME/Projects/game}"
 
 if [ -z "$PROJECT_NAME" ]; then
     echo ""
@@ -54,7 +54,7 @@ if [ -z "$PROJECT_NAME" ]; then
     echo ""
     echo "参数:"
     echo "  项目名      游戏项目名称（必填）"
-    echo "  目标目录    项目存放位置（可选，默认: ~/GodotGames/）"
+    echo "  目标目录    项目存放位置（可选，默认: ~/Projects/game/）"
     echo ""
     echo "示例:"
     echo "  $0 my_snake_game"

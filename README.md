@@ -61,7 +61,7 @@ python3 generate.py "做一个2D平台跳跃游戏，有3个平台和可收集�
 ### 方式二：一键新建游戏项目（推荐 ✅）
 
 ```bash
-# 创建新的游戏项目（默认在 ~/GodotGames/）
+# 创建新的游戏项目（默认在 ~/Projects/game/）
 ./tools/new_project.sh my_snake_game
 
 # 指定目标目录

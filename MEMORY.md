@@ -106,7 +106,7 @@
 ### 🔧 工具: 一键新建项目脚本 (`tools/new_project.sh`)
 - **文件**: `tools/new_project.sh`
 - **功能**: 自动创建空 Godot 4 项目 + 符号链接插件 + 预启用插件 + 打开 Godot
-- **用法**: `./tools/new_project.sh <项目名> [目标目录]`，默认目标目录 `~/GodotGames/`
+- **用法**: `./tools/new_project.sh <项目名> [目标目录]`，默认目标目录 `~/Projects/game/`
 - **设计决策**: 使用 symlink（非复制）链接插件，所有游戏项目共享同一份插件代码，更新自动同步
 - **自动生成的 project.godot**: 预写入 `[editor_plugins]` 段，首次打开即启用插件
 
