@@ -142,8 +142,8 @@ echo ""
 # 用 Godot 打开项目
 # ---------------------------------------------------------------------------
 if [ "$HAS_GODOT" = true ]; then
-    step "用 Godot 打开项目..."
-    open -a Godot --args --path "$PROJECT_DIR"
+    step "用 Godot 编辑器打开项目..."
+    open -a Godot --args --path "$PROJECT_DIR" -e
     echo ""
     info "Godot 正在启动，等待编辑器加载完成后："
     echo "  1. 底部面板找到 🎮 AI Engine"
