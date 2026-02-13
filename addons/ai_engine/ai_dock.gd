@@ -934,21 +934,15 @@ func _extract_json(text: String) -> String:
 # Hot-reload: reload open scenes & scripts after file generation
 # ---------------------------------------------------------------------------
 func _hot_reload_edited_scenes(ei: EditorInterface, files: Array) -> void:
-	# Collect which scene/script paths were generated or modified
+	# Scripts: auto-reloaded by Godot via auto_reload_scripts_on_external_change
+	# setting (enabled in plugin.gd). No manual call needed.
+	# Scenes: must be explicitly reloaded to update cached timestamps.
 	var scene_paths: Array[String] = []
-	var has_scripts := false
 	for file_info in files:
 		var path: String = file_info.get("path", "")
 		if path.ends_with(".tscn") or path.ends_with(".tres"):
 			scene_paths.append(path)
-		elif path.ends_with(".gd"):
-			has_scripts = true
 
-	# 1) Reload scripts first (auto_reload setting suppresses dialog)
-	if has_scripts:
-		ei.get_script_editor().reload_scripts()
-
-	# 2) Reload open scenes (updates cached timestamps, prevents dialog on scan)
 	var open_scenes := ei.get_open_scenes()
 	for scene_path in open_scenes:
 		if scene_path in scene_paths:
