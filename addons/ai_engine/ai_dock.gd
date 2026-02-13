@@ -388,6 +388,24 @@ func _validate_gdscript(path: String, content: String) -> Array[String]:
 		if ".connect(\"" in line:
 			errors.append("[%s:%d] Use new signal syntax: signal.connect(callable) not connect(\"string\")" % [path, i + 1])
 
+		# Common API misuse (data-driven: [bad_pattern, valid_pattern, message])
+		var api_rules := [
+			["call_group(", "get_tree().call_group",
+			 "Use 'get_tree().call_group()' — call_group() is a SceneTree method"],
+			["change_scene(", "get_tree().change_scene",
+			 "Use 'get_tree().change_scene_to_file()' (Godot 4)"],
+			["reload_current_scene(", "get_tree().reload_current_scene(",
+			 "Use 'get_tree().reload_current_scene()'"],
+			["rand_range(", "randf_range(",
+			 "Use 'randf_range()' or 'randi_range()' instead of 'rand_range()' (Godot 4)"],
+		]
+		for rule in api_rules:
+			if rule[0] in line and rule[1] not in line:
+				errors.append("[%s:%d] %s" % [path, i + 1, rule[2]])
+
+		if "get_tree().queue_free()" in line:
+			errors.append("[%s:%d] get_tree().queue_free() is wrong — use queue_free() on the node" % [path, i + 1])
+
 	return errors
 
 
@@ -583,6 +601,8 @@ func _validate_scene(path: String, content: String) -> Array[String]:
 	var actual_resources := 0
 	var node_names := {}
 	var script_paths := []
+	var declared_ext_ids: Array[String] = []
+	var declared_sub_ids: Array[String] = []
 
 	for line in lines:
 		var stripped := line.strip_edges()
@@ -598,34 +618,30 @@ func _validate_scene(path: String, content: String) -> Array[String]:
 				if num_end > num_start:
 					declared_load_steps = stripped.substr(num_start, num_end - num_start).to_int()
 
-		# Count resources
+		# Count resources & collect declared IDs
 		if stripped.begins_with("[ext_resource"):
 			actual_resources += 1
+			var id_str := _extract_quoted_value(stripped, "id")
+			if not id_str.is_empty():
+				declared_ext_ids.append(id_str)
 			if "type=\"Script\"" in stripped or "type=\"GDScript\"" in stripped:
-				var p_pos := stripped.find("path=\"")
-				if p_pos >= 0:
-					var p_start := p_pos + 6
-					var p_end := stripped.find("\"", p_start)
-					if p_end > p_start:
-						script_paths.append(stripped.substr(p_start, p_end - p_start))
+				var script_path := _extract_quoted_value(stripped, "path")
+				if not script_path.is_empty():
+					script_paths.append(script_path)
 
 		if stripped.begins_with("[sub_resource"):
 			actual_resources += 1
+			var id_str := _extract_quoted_value(stripped, "id")
+			if not id_str.is_empty():
+				declared_sub_ids.append(id_str)
 
 		# Check duplicate node names
-		if stripped.begins_with("[node name=\""):
-			var name_start := 12
-			var name_end := stripped.find("\"", name_start)
-			if name_end > name_start:
-				var node_name := stripped.substr(name_start, name_end - name_start)
-				var parent := "."
-				var par_pos := stripped.find("parent=\"")
-				if par_pos >= 0:
-					var par_start := par_pos + 8
-					var par_end := stripped.find("\"", par_start)
-					if par_end > par_start:
-						parent = stripped.substr(par_start, par_end - par_start)
-
+		if stripped.begins_with("[node"):
+			var node_name := _extract_quoted_value(stripped, "name")
+			if not node_name.is_empty():
+				var parent := _extract_quoted_value(stripped, "parent")
+				if parent.is_empty():
+					parent = "."
 				if parent not in node_names:
 					node_names[parent] = []
 				if node_name in node_names[parent]:
@@ -651,7 +667,52 @@ func _validate_scene(path: String, content: String) -> Array[String]:
 			if not found:
 				errors.append("[%s] References missing script '%s'" % [path, script_path])
 
+	# Validate ext_resource ID references — every ExtResource("X") must have a matching declaration
+	_check_resource_refs(path, lines, "ExtResource", declared_ext_ids, "ext_resource", errors)
+
+	# Validate sub_resource ID references — every SubResource("X") must have a matching declaration
+	_check_resource_refs(path, lines, "SubResource", declared_sub_ids, "sub_resource", errors)
+
 	return errors
+
+
+func _extract_quoted_value(line: String, key: String) -> String:
+	## Extract value from 'key="value"' pattern. Returns empty string if not found.
+	var pos := line.find(key + "=\"")
+	if pos < 0:
+		return ""
+	var start := pos + key.length() + 2
+	var end := line.find("\"", start)
+	if end > start:
+		return line.substr(start, end - start)
+	return ""
+
+
+func _check_resource_refs(path: String, lines: PackedStringArray, ref_type: String,
+		declared_ids: Array[String], decl_label: String, errors: Array[String]) -> void:
+	## Scan all lines for RefType("X") references and verify each X exists in declared_ids.
+	## ref_type is "ExtResource" or "SubResource"; decl_label is "ext_resource" or "sub_resource".
+	var pattern := ref_type + "(\""
+	var pattern_len := pattern.length()
+	var reported := {}  # Avoid duplicate error messages for the same missing ID
+
+	for line in lines:
+		var search_start := 0
+		while true:
+			var pos := line.find(pattern, search_start)
+			if pos < 0:
+				break
+			var ref_start := pos + pattern_len
+			var ref_end := line.find("\"", ref_start)
+			if ref_end <= ref_start:
+				break
+			var ref_id := line.substr(ref_start, ref_end - ref_start)
+			if ref_id not in declared_ids and ref_id not in reported:
+				errors.append("[%s] References %s(\"%s\") but no [%s] with id=\"%s\" is declared" % [
+					path, ref_type, ref_id, decl_label, ref_id
+				])
+				reported[ref_id] = true
+			search_start = ref_end + 1
 
 
 func _capture_godot_errors() -> Array[String]:

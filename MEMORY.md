@@ -77,13 +77,16 @@
   - **原因**: 未使用检测存在不可消除的误报（call_group 跨文件调用、信号处理函数），喂给 AI 修复会导致死循环
 - **校验项（error 级别）**:
   - GDScript: extends 声明、Godot 3/4 语法混用、信号连接语法
+  - GDScript: **API 误用检查**（数据驱动规则表）: `call_group()` 缺少 `get_tree()`、`change_scene()` → `change_scene_to_file()`、`reload_current_scene()` 缺少 `get_tree()`、`get_tree().queue_free()` 误用、`rand_range()` → `randf_range()`
   - Scene: load_steps 计数、重复节点名、脚本引用缺失
+  - Scene: **ext_resource ID 交叉校验** — 每个 `ExtResource("X")` 引用必须有对应的 `[ext_resource id="X"]` 声明
+  - Scene: **sub_resource ID 交叉校验** — 每个 `SubResource("X")` 引用必须有对应的 `[sub_resource id="X"]` 声明
   - Godot 日志: 捕获最近 ERROR + WARNING 级别输出
 - **校验项（warning 级别）**:
   - GDScript: 未使用变量检测（跳过 @export 变量）
   - GDScript: 未使用函数检测（跳过 17 个内置回调 + `on_`/`_on_` 信号处理函数）
   - 跨文件搜索: 遍历所有生成文件查找直接引用 + `call_group()` 字符串引用
-- **辅助工具函数**: `_extract_var_name()`, `_extract_func_name()`, `_contains_identifier()`, `_is_identifier_char()`, `_content_has_string_ref()`
+- **辅助工具函数**: `_extract_var_name()`, `_extract_func_name()`, `_contains_identifier()`, `_is_identifier_char()`, `_content_has_string_ref()`, `_extract_quoted_value()`, `_check_resource_refs()`
 - **已修复的 bug**: 误报导致自动修复死循环（音效生成场景，9 个假错误无限重试）
 - **JSON 重试机制**: Claude 返回非 JSON 响应时自动重试最多 2 次，使用 `JSON_RETRY_PROMPT` 强化 JSON 指令
 - **状态**: ✅ Steve 验证通过，功能落地和错误自修复体验符合预期
@@ -144,6 +147,10 @@
 | JSON 解析失败 | 模型输出包含 markdown 代码围栏 | 添加 JSON 提取逻辑，去除 ``` 包裹 |
 | 自动修复死循环 | 未使用变量/函数误报触发修复，Claude 无法消除误报 | 将 unused 检测降级为 warning，不触发修复循环 |
 | Claude 返回纯文本而非 JSON | prompt 过长时 "Respond with JSON only" 指令被淹没 | 1) 强化 prompt 末尾 JSON 指令 2) 自动重试机制（最多 2 次）用 JSON_RETRY_PROMPT 重新请求 |
+| `call_group()` 找不到 | AI 生成裸 `call_group()` 而非 `get_tree().call_group()` | 校验器增加 API 误用检查，自动修复循环捕获并修复 |
+| ext_resource ID 无效 | .tscn 中引用的 ExtResource("X") 没有对应声明 | 校验器增加 ext_resource/sub_resource ID 交叉校验 |
+| 热重载弹出"文件已在 Godot 外发生修改" | `scan()` 在 `reload_scene_from_path()` 之前执行 | 重排顺序: 先 reload 再 `call_deferred("scan")` |
+| `reload_scripts()` 不存在 | `ScriptEditor.reload_scripts()` 在 Godot 4.6 GDScript 中未暴露 | 改用 `auto_reload_scripts_on_external_change` 编辑器设置 |
 
 ---
 
