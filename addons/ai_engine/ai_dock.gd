@@ -844,11 +844,13 @@ func _on_generation_complete(result: Dictionary) -> void:
 			file.close()
 			file_count += 1
 
-	# Refresh editor: filesystem scan + scene/script hot-reload
+	# Refresh editor: hot-reload first, then deferred filesystem scan
+	# Order matters: reload updates editor's cached timestamps BEFORE scan
+	# detects changes, preventing the "file modified externally" dialog.
 	if editor_plugin:
 		var ei := editor_plugin.get_editor_interface()
-		ei.get_resource_filesystem().scan()
 		_hot_reload_edited_scenes(ei, files)
+		ei.get_resource_filesystem().call_deferred("scan")
 
 	# --- Validation & Auto-Repair ---
 	var validation_result := _validate_generated_files()
@@ -942,12 +944,12 @@ func _hot_reload_edited_scenes(ei: EditorInterface, files: Array) -> void:
 		elif path.ends_with(".gd"):
 			has_scripts = true
 
-	# Reload scenes currently open in the editor
+	# 1) Reload scripts first (auto_reload setting suppresses dialog)
+	if has_scripts:
+		ei.get_script_editor().reload_scripts()
+
+	# 2) Reload open scenes (updates cached timestamps, prevents dialog on scan)
 	var open_scenes := ei.get_open_scenes()
 	for scene_path in open_scenes:
 		if scene_path in scene_paths:
 			ei.reload_scene_from_path(scene_path)
-
-	# Reload scripts in the script editor
-	if has_scripts:
-		ei.get_script_editor().reload_scripts()
