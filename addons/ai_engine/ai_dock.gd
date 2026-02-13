@@ -200,31 +200,7 @@ func _on_send() -> void:
 	repair_attempt = 0
 	json_retry_attempt = 0
 
-	# Game type detection / selection
-	if game_type_selector:
-		var dropdown_type: int = game_type_selector.get_item_id(game_type_selector.selected)
-		if dropdown_type != GameType.UNIVERSAL:
-			# User explicitly selected a type — use it
-			current_game_type = dropdown_type
-		else:
-			# Auto-detect from text
-			var detected := _detect_game_type(text)
-			if detected != GameType.UNIVERSAL:
-				current_game_type = detected
-				# Update dropdown to show detected type (visual feedback)
-				for i in range(game_type_selector.item_count):
-					if game_type_selector.get_item_id(i) == detected:
-						game_type_selector.selected = i
-						break
-				_append_system("🎯 Detected game type: %s" % GAME_TYPE_NAMES.get(detected, "Unknown"))
-			# else: keep current_game_type from previous message (sticky)
-	else:
-		# No dropdown available — auto-detect only
-		var detected := _detect_game_type(text)
-		if detected != GameType.UNIVERSAL:
-			current_game_type = detected
-			_append_system("🎯 Detected game type: %s" % GAME_TYPE_NAMES.get(detected, "Unknown"))
-
+	_resolve_game_type(text)
 	_start_generation(text)
 
 
@@ -252,7 +228,7 @@ func _build_system_prompt(game_type: int) -> String:
 		GameType.SHOOTER:
 			rules = GAME_RULES_SHOOTER
 		_:
-			# Universal fallback: use platformer rules (matches v0.3 behavior)
+			# Universal fallback: use platformer rules
 			rules = GAME_RULES_PLATFORMER
 	return BASE_PROMPT + "\n" + rules
 
@@ -264,6 +240,28 @@ func _detect_game_type(user_text: String) -> int:
 			if lower.find(keyword) >= 0:
 				return game_type
 	return GameType.UNIVERSAL
+
+
+func _resolve_game_type(text: String) -> void:
+	# Explicit dropdown selection takes priority
+	if game_type_selector:
+		var dropdown_type: int = game_type_selector.get_item_id(game_type_selector.selected)
+		if dropdown_type != GameType.UNIVERSAL:
+			current_game_type = dropdown_type
+			return
+
+	# Auto-detect from text (works with or without dropdown)
+	var detected := _detect_game_type(text)
+	if detected != GameType.UNIVERSAL:
+		current_game_type = detected
+		# Update dropdown visual feedback if available
+		if game_type_selector:
+			for i in range(game_type_selector.item_count):
+				if game_type_selector.get_item_id(i) == detected:
+					game_type_selector.selected = i
+					break
+		_append_system("🎯 Detected game type: %s" % GAME_TYPE_NAMES.get(detected, "Unknown"))
+	# else: keep current_game_type (sticky)
 
 
 # ---------------------------------------------------------------------------
@@ -773,18 +771,12 @@ func _on_generation_complete(result: Dictionary) -> void:
 		worker_thread = null
 
 	if result.exit_code != 0:
-		is_generating = false
-		send_btn.disabled = false
-		_append_error("Claude CLI failed (exit code %d)" % result.exit_code)
-		status_label.text = "Error"
+		_finish_generation_with_error("Claude CLI failed (exit code %d)" % result.exit_code)
 		return
 
 	var response_text: String = result.output.strip_edges()
 	if response_text.is_empty():
-		is_generating = false
-		send_btn.disabled = false
-		_append_error("Empty response from Claude CLI")
-		status_label.text = "Error"
+		_finish_generation_with_error("Empty response from Claude CLI")
 		return
 
 	# Parse JSON
@@ -805,16 +797,13 @@ func _on_generation_complete(result: Dictionary) -> void:
 			return
 
 		# Retries exhausted, show error
-		is_generating = false
-		send_btn.disabled = false
 		json_retry_attempt = 0
-		_append_error("Failed to parse AI response as JSON")
 		_append_system("Raw (first 300 chars): " + response_text.substr(0, 300))
 		var debug_file := FileAccess.open("res://ai_debug_response.txt", FileAccess.WRITE)
 		if debug_file:
 			debug_file.store_string(response_text)
 			debug_file.close()
-		status_label.text = "Parse error"
+		_finish_generation_with_error("Failed to parse AI response as JSON", "Parse error")
 		return
 
 	var data: Dictionary = json.data
@@ -825,24 +814,7 @@ func _on_generation_complete(result: Dictionary) -> void:
 
 	last_generated_files = files
 
-	# Write files
-	var file_count := 0
-	for file_info in files:
-		var path: String = file_info.get("path", "")
-		var content: String = file_info.get("content", "")
-
-		if path.is_empty():
-			continue
-
-		var dir_path := path.get_base_dir()
-		if not DirAccess.dir_exists_absolute(dir_path):
-			DirAccess.make_dir_recursive_absolute(dir_path)
-
-		var file := FileAccess.open(path, FileAccess.WRITE)
-		if file:
-			file.store_string(content)
-			file.close()
-			file_count += 1
+	var file_count := _write_generated_files(files)
 
 	# Refresh editor: hot-reload first, then deferred filesystem scan
 	# Order matters: reload updates editor's cached timestamps BEFORE scan
@@ -928,6 +900,37 @@ func _extract_json(text: String) -> String:
 		return cleaned.substr(start, end - start + 1)
 
 	return cleaned
+
+
+# ---------------------------------------------------------------------------
+# File writing helper
+# ---------------------------------------------------------------------------
+func _write_generated_files(files: Array) -> int:
+	var file_count := 0
+	for file_info in files:
+		var path: String = file_info.get("path", "")
+		var content: String = file_info.get("content", "")
+		if path.is_empty():
+			continue
+		var dir_path := path.get_base_dir()
+		if not DirAccess.dir_exists_absolute(dir_path):
+			DirAccess.make_dir_recursive_absolute(dir_path)
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		if file:
+			file.store_string(content)
+			file.close()
+			file_count += 1
+	return file_count
+
+
+# ---------------------------------------------------------------------------
+# Generation state helpers
+# ---------------------------------------------------------------------------
+func _finish_generation_with_error(message: String, status: String = "Error") -> void:
+	is_generating = false
+	send_btn.disabled = false
+	_append_error(message)
+	status_label.text = status
 
 
 # ---------------------------------------------------------------------------
