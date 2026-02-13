@@ -844,9 +844,11 @@ func _on_generation_complete(result: Dictionary) -> void:
 			file.close()
 			file_count += 1
 
-	# Refresh editor filesystem
+	# Refresh editor: filesystem scan + scene/script hot-reload
 	if editor_plugin:
-		editor_plugin.get_editor_interface().get_resource_filesystem().scan()
+		var ei := editor_plugin.get_editor_interface()
+		ei.get_resource_filesystem().scan()
+		_hot_reload_edited_scenes(ei, files)
 
 	# --- Validation & Auto-Repair ---
 	var validation_result := _validate_generated_files()
@@ -924,3 +926,28 @@ func _extract_json(text: String) -> String:
 		return cleaned.substr(start, end - start + 1)
 
 	return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Hot-reload: reload open scenes & scripts after file generation
+# ---------------------------------------------------------------------------
+func _hot_reload_edited_scenes(ei: EditorInterface, files: Array) -> void:
+	# Collect which scene/script paths were generated or modified
+	var scene_paths: Array[String] = []
+	var has_scripts := false
+	for file_info in files:
+		var path: String = file_info.get("path", "")
+		if path.ends_with(".tscn") or path.ends_with(".tres"):
+			scene_paths.append(path)
+		elif path.ends_with(".gd"):
+			has_scripts = true
+
+	# Reload scenes currently open in the editor
+	var open_scenes := ei.get_open_scenes()
+	for scene_path in open_scenes:
+		if scene_path in scene_paths:
+			ei.reload_scene_from_path(scene_path)
+
+	# Reload scripts in the script editor
+	if has_scripts:
+		ei.get_script_editor().reload_scripts()
