@@ -58,7 +58,20 @@ cd tools
 python3 generate.py "做一个2D平台跳跃游戏，有3个平台和可收集的星星"
 ```
 
-### 方式二：编辑器内对话（开发中 🚧）
+### 方式二：一键新建游戏项目（推荐 ✅）
+
+```bash
+# 创建新的游戏项目（默认在 ~/GodotGames/）
+./tools/new_project.sh my_snake_game
+
+# 指定目标目录
+./tools/new_project.sh 太空射击 ~/Desktop/games
+```
+
+脚本会自动：创建空 Godot 项目 → 链接 AI 插件 → 启用插件 → 打开 Godot。
+打开后在底部面板找到 🎮 AI Engine，输入游戏描述即可生成。
+
+### 方式三：手动添加插件到已有项目
 
 1. 将 `addons/ai_engine` 复制到 Godot 项目
 2. Project → Project Settings → Plugins → 启用 AI Game Engine

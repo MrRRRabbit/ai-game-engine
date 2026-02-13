@@ -101,6 +101,14 @@
 - **UI**: OptionButton 下拉框，支持手动选择或 Auto-detect
 - **回退策略**: 未匹配时回退到 PLATFORMER 规则（兼容 v0.3 行为）
 - **状态**: 代码已生成，待 Steve 验证
+- **`@onready` 崩溃修复**: `@tool` 脚本中 `@onready` 在 Godot 缓存旧 `.tscn` 时失败，改为 `_ready()` 中手动 `get_node()` + null 检查
+
+### 🔧 工具: 一键新建项目脚本 (`tools/new_project.sh`)
+- **文件**: `tools/new_project.sh`
+- **功能**: 自动创建空 Godot 4 项目 + 符号链接插件 + 预启用插件 + 打开 Godot
+- **用法**: `./tools/new_project.sh <项目名> [目标目录]`，默认目标目录 `~/GodotGames/`
+- **设计决策**: 使用 symlink（非复制）链接插件，所有游戏项目共享同一份插件代码，更新自动同步
+- **自动生成的 project.godot**: 预写入 `[editor_plugins]` 段，首次打开即启用插件
 
 ### 📋 第三步: GDExtension 运行时模块 — 未开始
 
