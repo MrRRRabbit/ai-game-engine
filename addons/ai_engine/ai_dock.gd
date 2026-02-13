@@ -3,11 +3,11 @@ extends VBoxContainer
 
 var editor_plugin: EditorPlugin
 
-@onready var chat_history: RichTextLabel = $ChatHistory
-@onready var input_field: LineEdit = $InputRow/InputField
-@onready var send_btn: Button = $InputRow/SendBtn
-@onready var status_label: Label = $StatusBar/StatusLabel
-@onready var game_type_selector: OptionButton = $GameTypeRow/GameTypeSelector
+var chat_history: RichTextLabel
+var input_field: LineEdit
+var send_btn: Button
+var status_label: Label
+var game_type_selector: OptionButton
 
 var conversation: Array[Dictionary] = []
 var is_generating: bool = false
@@ -157,17 +157,29 @@ Respond with ONLY the JSON object. Nothing else."""
 
 
 func _ready() -> void:
+	# Get node references manually (more reliable than @onready in @tool scripts)
+	chat_history = $ChatHistory
+	input_field = $InputRow/InputField
+	send_btn = $InputRow/SendBtn
+	status_label = $StatusBar/StatusLabel
+	game_type_selector = get_node_or_null("GameTypeRow/GameTypeSelector")
+
+	if not send_btn or not input_field or not chat_history:
+		push_error("AI Engine: Required UI nodes not found")
+		return
+
 	send_btn.pressed.connect(_on_send)
 	input_field.text_submitted.connect(_on_text_submitted)
 
 	# Populate game type dropdown
-	game_type_selector.add_item("Auto-detect", GameType.UNIVERSAL)
-	game_type_selector.add_item("Platformer / 平台跳跃", GameType.PLATFORMER)
-	game_type_selector.add_item("Snake / 贪吃蛇", GameType.SNAKE)
-	game_type_selector.add_item("Breakout / 打砖块", GameType.BREAKOUT)
-	game_type_selector.add_item("Shooter / 射击", GameType.SHOOTER)
-	game_type_selector.selected = 0
-	game_type_selector.item_selected.connect(_on_game_type_selected)
+	if game_type_selector:
+		game_type_selector.add_item("Auto-detect", GameType.UNIVERSAL)
+		game_type_selector.add_item("Platformer / 平台跳跃", GameType.PLATFORMER)
+		game_type_selector.add_item("Snake / 贪吃蛇", GameType.SNAKE)
+		game_type_selector.add_item("Breakout / 打砖块", GameType.BREAKOUT)
+		game_type_selector.add_item("Shooter / 射击", GameType.SHOOTER)
+		game_type_selector.selected = 0
+		game_type_selector.item_selected.connect(_on_game_type_selected)
 
 	_append_system("🎮 AI Game Engine v0.4")
 	_append_system("Game type templates: Platformer, Snake, Breakout, Shooter (auto-detected or select above).")
@@ -189,22 +201,29 @@ func _on_send() -> void:
 	json_retry_attempt = 0
 
 	# Game type detection / selection
-	var dropdown_type: int = game_type_selector.get_item_id(game_type_selector.selected)
-	if dropdown_type != GameType.UNIVERSAL:
-		# User explicitly selected a type — use it
-		current_game_type = dropdown_type
+	if game_type_selector:
+		var dropdown_type: int = game_type_selector.get_item_id(game_type_selector.selected)
+		if dropdown_type != GameType.UNIVERSAL:
+			# User explicitly selected a type — use it
+			current_game_type = dropdown_type
+		else:
+			# Auto-detect from text
+			var detected := _detect_game_type(text)
+			if detected != GameType.UNIVERSAL:
+				current_game_type = detected
+				# Update dropdown to show detected type (visual feedback)
+				for i in range(game_type_selector.item_count):
+					if game_type_selector.get_item_id(i) == detected:
+						game_type_selector.selected = i
+						break
+				_append_system("🎯 Detected game type: %s" % GAME_TYPE_NAMES.get(detected, "Unknown"))
+			# else: keep current_game_type from previous message (sticky)
 	else:
-		# Auto-detect from text
+		# No dropdown available — auto-detect only
 		var detected := _detect_game_type(text)
 		if detected != GameType.UNIVERSAL:
 			current_game_type = detected
-			# Update dropdown to show detected type (visual feedback)
-			for i in range(game_type_selector.item_count):
-				if game_type_selector.get_item_id(i) == detected:
-					game_type_selector.selected = i
-					break
 			_append_system("🎯 Detected game type: %s" % GAME_TYPE_NAMES.get(detected, "Unknown"))
-		# else: keep current_game_type from previous message (sticky)
 
 	_start_generation(text)
 
