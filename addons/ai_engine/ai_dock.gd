@@ -160,8 +160,9 @@ func _scan_project_files(dir_path: String, result: Array) -> Array:
 # ---------------------------------------------------------------------------
 # Error detection & validation
 # ---------------------------------------------------------------------------
-func _validate_generated_files() -> Array[String]:
+func _validate_generated_files() -> Dictionary:
 	var errors: Array[String] = []
+	var warnings: Array[String] = []
 
 	for file_info in last_generated_files:
 		var path: String = file_info.get("path", "")
@@ -172,10 +173,12 @@ func _validate_generated_files() -> Array[String]:
 
 		if path.ends_with(".gd"):
 			errors.append_array(_validate_gdscript(path, content))
+			warnings.append_array(_check_unused_variables(path, content.split("\n")))
+			warnings.append_array(_check_unused_functions_cross_file(path, content.split("\n")))
 		elif path.ends_with(".tscn"):
 			errors.append_array(_validate_scene(path, content))
 
-	return errors
+	return {"errors": errors, "warnings": warnings}
 
 
 func _validate_gdscript(path: String, content: String) -> Array[String]:
@@ -215,12 +218,6 @@ func _validate_gdscript(path: String, content: String) -> Array[String]:
 		if ".connect(\"" in line:
 			errors.append("[%s:%d] Use new signal syntax: signal.connect(callable) not connect(\"string\")" % [path, i + 1])
 
-	# --- Unused variable detection ---
-	errors.append_array(_check_unused_variables(path, lines))
-
-	# --- Unused function detection ---
-	errors.append_array(_check_unused_functions(path, lines))
-
 	return errors
 
 
@@ -241,6 +238,12 @@ func _check_unused_variables(path: String, lines: PackedStringArray) -> Array[St
 	# Check each declared variable for usage elsewhere
 	for var_name in declarations:
 		var decl_line_idx: int = declarations[var_name] - 1
+
+		# Skip @export variables — they are set from the Godot editor Inspector
+		var decl_line := lines[decl_line_idx].strip_edges()
+		if "@export" in decl_line:
+			continue
+
 		var is_used := false
 
 		for i in range(lines.size()):
@@ -309,7 +312,7 @@ func _is_identifier_char(ch: String) -> bool:
 		(ch >= "0" and ch <= "9") or ch == "_"
 
 
-func _check_unused_functions(path: String, lines: PackedStringArray) -> Array[String]:
+func _check_unused_functions_cross_file(path: String, lines: PackedStringArray) -> Array[String]:
 	var warnings: Array[String] = []
 
 	# Built-in callbacks that Godot calls automatically — never flag these
@@ -331,16 +334,20 @@ func _check_unused_functions(path: String, lines: PackedStringArray) -> Array[St
 			var func_name := _extract_func_name(line)
 			if func_name.is_empty():
 				continue
-			# Skip builtins and private signal handlers (common Godot pattern)
+			# Skip builtins
 			if func_name in builtin_callbacks:
+				continue
+			# Skip signal handler naming conventions (called externally or via connect)
+			if func_name.begins_with("_on_") or func_name.begins_with("on_"):
 				continue
 			declarations[func_name] = i + 1
 
-	# Check each declared function for references elsewhere
+	# Check each declared function for references
 	for func_name in declarations:
 		var decl_line_idx: int = declarations[func_name] - 1
 		var is_used := false
 
+		# 1) Search within the same file
 		for i in range(lines.size()):
 			if i == decl_line_idx:
 				continue
@@ -348,12 +355,25 @@ func _check_unused_functions(path: String, lines: PackedStringArray) -> Array[St
 			var stripped := line.strip_edges()
 			if stripped.begins_with("#"):
 				continue
-			# Skip: the function's own body re-declaring itself is not a reference
 			if stripped.begins_with("func ") or stripped.begins_with("static func "):
 				continue
 			if _contains_identifier(line, func_name):
 				is_used = true
 				break
+
+		# 2) Search all other generated files (cross-file: direct refs + string refs)
+		if not is_used:
+			for other_file in last_generated_files:
+				var other_path: String = other_file.get("path", "")
+				var other_content: String = other_file.get("content", "")
+				if other_path == path or other_path.is_empty():
+					continue
+				if _contains_identifier(other_content, func_name):
+					is_used = true
+					break
+				if _content_has_string_ref(other_content, func_name):
+					is_used = true
+					break
 
 		if not is_used:
 			warnings.append("[%s:%d] Function '%s' is declared but never referenced" % [
@@ -361,6 +381,11 @@ func _check_unused_functions(path: String, lines: PackedStringArray) -> Array[St
 			])
 
 	return warnings
+
+
+func _content_has_string_ref(content: String, func_name: String) -> bool:
+	# Matches function name inside string literals (catches call_group patterns)
+	return content.find("\"%s\"" % func_name) >= 0 or content.find("'%s'" % func_name) >= 0
 
 
 func _extract_func_name(line: String) -> String:
@@ -636,8 +661,12 @@ func _on_generation_complete(result: Dictionary) -> void:
 		editor_plugin.get_editor_interface().get_resource_filesystem().scan()
 
 	# --- Validation & Auto-Repair ---
-	var validation_errors := _validate_generated_files()
+	var validation_result := _validate_generated_files()
+	var validation_errors: Array[String] = validation_result.get("errors", [])
+	var validation_warnings: Array[String] = validation_result.get("warnings", [])
 	var godot_errors := _capture_godot_errors()
+
+	# Only hard errors trigger auto-repair (not warnings)
 	var all_errors: Array[String] = []
 	all_errors.append_array(validation_errors)
 	all_errors.append_array(godot_errors)
@@ -679,6 +708,12 @@ func _on_generation_complete(result: Dictionary) -> void:
 		if repair_attempt > 0:
 			_append_repair("All errors fixed after %d attempt(s)!" % repair_attempt)
 		status_label.text = "Ready ✅ — %d files" % file_count
+
+	# Show warnings as informational notes (do NOT trigger repair)
+	if validation_warnings.size() > 0:
+		_append_system("ℹ️ Notes (%d):" % validation_warnings.size())
+		for w in validation_warnings:
+			_append_system("  · " + w)
 
 
 # ---------------------------------------------------------------------------

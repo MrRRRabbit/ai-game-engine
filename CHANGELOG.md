@@ -12,6 +12,12 @@
 - 未使用函数检测: 静态分析 func/static func 声明，自动跳过 Godot 内置回调 (17 个)
 - Godot 日志 WARNING 捕获: 日志扫描范围从仅 ERROR 扩展至 ERROR + WARNING
 
+### Fixed
+- 修复校验器误报导致自动修复死循环: 未使用变量/函数降级为 warning（不触发修复）
+- 信号处理函数误报: `on_`/`_on_` 前缀函数自动识别为信号处理器，不再标记
+- 跨文件引用检测: call_group() 字符串引用 + 跨文件标识符搜索
+- @export 变量误报: 由编辑器 Inspector 设置的变量不再标记为未使用
+
 ## [0.2.0] - 2025-02-13 ✅
 ### Added
 - Godot 编辑器插件 (`addons/ai_engine/`)

@@ -71,13 +71,20 @@
 ### 🚧 第二步追加: 自动修复循环 (v0.3) — 开发中
 - **开始日期**: 2025-02-13
 - **能力**: 生成后自动校验 → 捕获错误 → 喂回 AI 修复 → 最多重试 3 次
-- **校验项**:
+- **核心架构决策: error vs warning 分级**:
+  - **error（触发修复循环）**: 语法错误、Godot 3/4 混用、场景结构问题、Godot 日志 ERROR/WARNING
+  - **warning（仅展示为 ℹ️ 提示，不触发修复）**: 未使用变量、未使用函数
+  - **原因**: 未使用检测存在不可消除的误报（call_group 跨文件调用、信号处理函数），喂给 AI 修复会导致死循环
+- **校验项（error 级别）**:
   - GDScript: extends 声明、Godot 3/4 语法混用、信号连接语法
-  - GDScript: 未使用变量检测（var/@onready var/@export var，全词匹配）
-  - GDScript: 未使用函数检测（自动跳过 _ready 等 17 个 Godot 内置回调）
   - Scene: load_steps 计数、重复节点名、脚本引用缺失
   - Godot 日志: 捕获最近 ERROR + WARNING 级别输出
-- **辅助工具函数**: `_extract_var_name()`, `_extract_func_name()`, `_contains_identifier()`, `_is_identifier_char()`
+- **校验项（warning 级别）**:
+  - GDScript: 未使用变量检测（跳过 @export 变量）
+  - GDScript: 未使用函数检测（跳过 17 个内置回调 + `on_`/`_on_` 信号处理函数）
+  - 跨文件搜索: 遍历所有生成文件查找直接引用 + `call_group()` 字符串引用
+- **辅助工具函数**: `_extract_var_name()`, `_extract_func_name()`, `_contains_identifier()`, `_is_identifier_char()`, `_content_has_string_ref()`
+- **已修复的 bug**: 误报导致自动修复死循环（音效生成场景，9 个假错误无限重试）
 - **状态**: 代码已生成，待 Steve 验证
 
 ### 📋 第三步: GDExtension 运行时模块 — 未开始
@@ -110,6 +117,7 @@
 | 跳跃太低 | JUMP_VELOCITY 绝对值太小 | 在 prompt 中指定 -600 到 -700 范围 |
 | 信号未连接 | _ready 中信号连接时序问题 | 改用 call_group 替代直接信号连接 |
 | JSON 解析失败 | 模型输出包含 markdown 代码围栏 | 添加 JSON 提取逻辑，去除 ``` 包裹 |
+| 自动修复死循环 | 未使用变量/函数误报触发修复，Claude 无法消除误报 | 将 unused 检测降级为 warning，不触发修复循环 |
 
 ---
 
