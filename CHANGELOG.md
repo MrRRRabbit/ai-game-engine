@@ -11,6 +11,8 @@
 - 未使用变量检测: 静态分析 var/@onready var/@export var 声明，全词匹配检查引用
 - 未使用函数检测: 静态分析 func/static func 声明，自动跳过 Godot 内置回调 (17 个)
 - Godot 日志 WARNING 捕获: 日志扫描范围从仅 ERROR 扩展至 ERROR + WARNING
+- JSON 解析失败自动重试: Claude 返回非 JSON 时自动重试 (最多 2 次)，使用强化 JSON 指令
+- Prompt 末尾 JSON 强制指令增强: "Respond with JSON only" → 更明确的 JSON-only 约束
 
 ### Fixed
 - 修复校验器误报导致自动修复死循环: 未使用变量/函数降级为 warning（不触发修复）

@@ -85,6 +85,7 @@
   - 跨文件搜索: 遍历所有生成文件查找直接引用 + `call_group()` 字符串引用
 - **辅助工具函数**: `_extract_var_name()`, `_extract_func_name()`, `_contains_identifier()`, `_is_identifier_char()`, `_content_has_string_ref()`
 - **已修复的 bug**: 误报导致自动修复死循环（音效生成场景，9 个假错误无限重试）
+- **JSON 重试机制**: Claude 返回非 JSON 响应时自动重试最多 2 次，使用 `JSON_RETRY_PROMPT` 强化 JSON 指令
 - **状态**: 代码已生成，待 Steve 验证
 
 ### 📋 第三步: GDExtension 运行时模块 — 未开始
@@ -118,6 +119,7 @@
 | 信号未连接 | _ready 中信号连接时序问题 | 改用 call_group 替代直接信号连接 |
 | JSON 解析失败 | 模型输出包含 markdown 代码围栏 | 添加 JSON 提取逻辑，去除 ``` 包裹 |
 | 自动修复死循环 | 未使用变量/函数误报触发修复，Claude 无法消除误报 | 将 unused 检测降级为 warning，不触发修复循环 |
+| Claude 返回纯文本而非 JSON | prompt 过长时 "Respond with JSON only" 指令被淹没 | 1) 强化 prompt 末尾 JSON 指令 2) 自动重试机制（最多 2 次）用 JSON_RETRY_PROMPT 重新请求 |
 
 ---
 

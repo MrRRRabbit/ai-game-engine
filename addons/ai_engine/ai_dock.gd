@@ -17,6 +17,11 @@ var repair_attempt: int = 0
 const MAX_REPAIR_ATTEMPTS := 3
 var last_generated_files: Array = []
 
+# JSON retry state
+var json_retry_attempt: int = 0
+const MAX_JSON_RETRIES := 2
+var last_user_prompt: String = ""
+
 # ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
@@ -70,6 +75,17 @@ CURRENT FILES THAT NEED FIXING:
 Output a JSON object with the fixed files. Include ALL files that need changes, with their COMPLETE content (not partial).
 Fix every error listed above. Output ONLY the JSON object."""
 
+const JSON_RETRY_PROMPT := """Your previous response was NOT valid JSON. You returned natural language text instead.
+
+You MUST respond with ONLY a valid JSON object. No explanations, no analysis, no markdown.
+The FIRST character of your response must be "{" and the last must be "}".
+
+The user's original request was:
+%s
+
+%s
+Respond with ONLY the JSON object. Nothing else."""
+
 
 func _ready() -> void:
 	send_btn.pressed.connect(_on_send)
@@ -91,6 +107,7 @@ func _on_send() -> void:
 	input_field.text = ""
 	_append_user(text)
 	repair_attempt = 0
+	json_retry_attempt = 0
 	_start_generation(text)
 
 
@@ -544,8 +561,9 @@ func _start_generation(user_text: String, is_repair: bool = false) -> void:
 	var full_prompt: String
 
 	if is_repair:
-		full_prompt = SYSTEM_PROMPT + "\n\n" + user_text + "\nRespond with JSON only."
+		full_prompt = SYSTEM_PROMPT + "\n\n" + user_text + "\n\nIMPORTANT: Your response must be ONLY a valid JSON object starting with { — no other text."
 	else:
+		last_user_prompt = user_text
 		conversation.append({"role": "user", "content": user_text})
 
 		var project_context := _get_project_context()
@@ -554,7 +572,7 @@ func _start_generation(user_text: String, is_repair: bool = false) -> void:
 			var prefix = "User" if msg.role == "user" else "Assistant"
 			history_text += "%s: %s\n" % [prefix, msg.content]
 
-		full_prompt = "%s\n\n%s\nCONVERSATION:\n%s\nRespond with JSON only." % [
+		full_prompt = "%s\n\n%s\nCONVERSATION:\n%s\n\nIMPORTANT: Your response must be ONLY a valid JSON object starting with { — no other text." % [
 			SYSTEM_PROMPT, project_context, history_text
 		]
 
@@ -619,8 +637,21 @@ func _on_generation_complete(result: Dictionary) -> void:
 	var parse_result := json.parse(json_text)
 
 	if parse_result != OK:
+		# Auto-retry with stronger JSON enforcement
+		if json_retry_attempt < MAX_JSON_RETRIES:
+			json_retry_attempt += 1
+			_append_repair("Response was not JSON, retrying (%d/%d)..." % [
+				json_retry_attempt, MAX_JSON_RETRIES
+			])
+			var project_context := _get_project_context()
+			var retry_prompt := JSON_RETRY_PROMPT % [last_user_prompt, project_context]
+			_start_generation(retry_prompt, true)
+			return
+
+		# Retries exhausted, show error
 		is_generating = false
 		send_btn.disabled = false
+		json_retry_attempt = 0
 		_append_error("Failed to parse AI response as JSON")
 		_append_system("Raw (first 300 chars): " + response_text.substr(0, 300))
 		var debug_file := FileAccess.open("res://ai_debug_response.txt", FileAccess.WRITE)
@@ -631,6 +662,7 @@ func _on_generation_complete(result: Dictionary) -> void:
 		return
 
 	var data: Dictionary = json.data
+	json_retry_attempt = 0
 	var action: String = data.get("action", "create")
 	var message: String = data.get("message", "Done")
 	var files: Array = data.get("files", [])
