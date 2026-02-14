@@ -24,10 +24,7 @@ const MAX_JSON_RETRIES := 2
 var last_user_prompt: String = ""
 
 # Runtime test state (preserved across deferred callbacks)
-var _pending_message: String = ""
-var _pending_file_count: int = 0
-var _pending_action: String = ""
-var _pending_warnings: Array[String] = []
+var _pending_context: Dictionary = {}  # {message, file_count, action, warnings}
 
 # Game type detection
 enum GameType { UNIVERSAL, PLATFORMER, SNAKE, BREAKOUT, SHOOTER }
@@ -944,23 +941,7 @@ func _on_generation_complete(result: Dictionary) -> void:
 	all_errors.append_array(godot_errors)
 
 	if all_errors.size() > 0 and repair_attempt < MAX_REPAIR_ATTEMPTS:
-		repair_attempt += 1
-		_append_ai("%s (%d files written)" % [message, file_count])
-		_append_repair("Detected %d error(s), auto-repairing (%d/%d)..." % [
-			all_errors.size(), repair_attempt, MAX_REPAIR_ATTEMPTS
-		])
-		for err in all_errors:
-			_append_system("  • " + err)
-
-		# Build repair context
-		var files_context := ""
-		for file_info in last_generated_files:
-			files_context += "\n--- %s ---\n%s\n" % [file_info.get("path", ""), file_info.get("content", "")]
-
-		var error_text := "\n".join(all_errors)
-		var repair_prompt := REPAIR_PROMPT % [error_text, files_context]
-
-		_start_generation(repair_prompt, true)
+		_trigger_auto_repair(all_errors, message, file_count, "Detected")
 		return
 
 	# --- Static errors exhausted or repaired: run runtime test ---
@@ -982,10 +963,10 @@ func _on_generation_complete(result: Dictionary) -> void:
 		return
 
 	# Static validation passed — launch runtime test on background thread
-	_pending_message = message
-	_pending_file_count = file_count
-	_pending_action = action
-	_pending_warnings = validation_warnings
+	_pending_context = {
+		"message": message, "file_count": file_count,
+		"action": action, "warnings": validation_warnings,
+	}
 	_start_runtime_test()
 
 
@@ -1040,6 +1021,24 @@ func _finish_generation_with_error(message: String, status: String = "Error") ->
 	send_btn.disabled = false
 	_append_error(message)
 	status_label.text = status
+
+
+func _trigger_auto_repair(errors: Array[String], ai_message: String,
+		file_count: int, error_source: String) -> void:
+	## Shared helper: display errors and start a repair generation cycle.
+	## Used by both static validation and runtime test error paths.
+	repair_attempt += 1
+	_append_ai("%s (%d files written)" % [ai_message, file_count])
+	_append_repair("%s %d error(s), auto-repairing (%d/%d)..." % [
+		error_source, errors.size(), repair_attempt, MAX_REPAIR_ATTEMPTS
+	])
+	for err in errors:
+		_append_system("  • " + err)
+	var files_context := ""
+	for file_info in last_generated_files:
+		files_context += "\n--- %s ---\n%s\n" % [
+			file_info.get("path", ""), file_info.get("content", "")]
+	_start_generation(REPAIR_PROMPT % ["\n".join(errors), files_context], true)
 
 
 # ---------------------------------------------------------------------------
@@ -1210,46 +1209,32 @@ func _on_runtime_test_complete(runtime_errors: Array) -> void:
 		all_errors.append(str(err))
 
 	if all_errors.size() > 0 and repair_attempt < MAX_REPAIR_ATTEMPTS:
-		repair_attempt += 1
-		_append_ai("%s (%d files written)" % [_pending_message, _pending_file_count])
-		_append_repair("Runtime test found %d error(s), auto-repairing (%d/%d)..." % [
-			all_errors.size(), repair_attempt, MAX_REPAIR_ATTEMPTS
-		])
-		for err in all_errors:
-			_append_system("  • " + err)
-
-		# Build repair context (same pattern as static repair)
-		var files_context := ""
-		for file_info in last_generated_files:
-			files_context += "\n--- %s ---\n%s\n" % [
-				file_info.get("path", ""), file_info.get("content", "")
-			]
-		var error_text := "\n".join(all_errors)
-		var repair_prompt := REPAIR_PROMPT % [error_text, files_context]
-		_start_generation(repair_prompt, true)
+		_trigger_auto_repair(all_errors, _pending_context.get("message", ""),
+			_pending_context.get("file_count", 0), "Runtime test found")
 		return
 
 	# --- Done (no runtime errors or retries exhausted) ---
 	is_generating = false
 	send_btn.disabled = false
+	var msg: String = _pending_context.get("message", "")
+	var fc: int = _pending_context.get("file_count", 0)
 
 	if all_errors.size() > 0:
-		_append_ai("%s (%d files written)" % [_pending_message, _pending_file_count])
+		_append_ai("%s (%d files written)" % [msg, fc])
 		_append_repair("Runtime errors remain after %d attempts:" % MAX_REPAIR_ATTEMPTS)
 		for err in all_errors:
 			_append_system("  • " + err)
-		status_label.text = "Done with warnings — %d files" % _pending_file_count
+		status_label.text = "Done with warnings — %d files" % fc
 	else:
-		_append_ai("%s (%d files %s) ✅" % [
-			_pending_message, _pending_file_count,
-			"created" if _pending_action == "create" else "modified"
-		])
+		var act: String = _pending_context.get("action", "create")
+		_append_ai("%s (%d files %s) ✅" % [msg, fc, "created" if act == "create" else "modified"])
 		if repair_attempt > 0:
 			_append_repair("All errors fixed after %d attempt(s)!" % repair_attempt)
-		status_label.text = "Ready ✅ — %d files" % _pending_file_count
+		status_label.text = "Ready ✅ — %d files" % fc
 
 	# Show warnings
-	if _pending_warnings.size() > 0:
-		_append_system("ℹ️ Notes (%d):" % _pending_warnings.size())
-		for w in _pending_warnings:
+	var warnings: Array = _pending_context.get("warnings", [])
+	if warnings.size() > 0:
+		_append_system("ℹ️ Notes (%d):" % warnings.size())
+		for w in warnings:
 			_append_system("  · " + w)
