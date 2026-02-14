@@ -29,7 +29,8 @@
 - [x] JSON 解析失败自动重试机制
 - [x] Prompt 优化: 分类型使用专门的 prompt (BASE_PROMPT + GAME_RULES_*)
 - [x] 游戏类型自动检测 + UI 下拉选择器
-- [ ] 自动运行测试 (headless 模式运行、截图对比)
+- [x] 自动运行测试 Phase 1 (headless 模式崩溃检测)
+- [ ] 自动运行测试 Phase 2 (输入模拟 + 游戏类型断言 + 截图对比)
 - [ ] 支持中文和英文混合输入
 
 ## Phase 4: 多模态输入
